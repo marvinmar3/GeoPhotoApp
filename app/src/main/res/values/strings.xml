@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">GeoPhotoApp</string>
+    <string name="photo_description">Foto</string>
+    <string name="take_photo">Tomar Foto</string>
+</resources>
