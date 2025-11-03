@@ -32,6 +32,7 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import android.os.ParcelFileDescriptor;
 
 public class CameraActivity extends AppCompatActivity {
     private static final int REQUEST_IMAGE_CAPTURE = 1;
@@ -232,65 +233,76 @@ public class CameraActivity extends AppCompatActivity {
                     .format(new Date());
             String displayName = "GeoPhoto_" + timeStamp + ".jpg";
 
-            // Para Android 10+ usar MediaStore
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, displayName);
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis());
+
+            // Agregar ubicación si está disponible
+            if (currentLocation != null) {
+                values.put(MediaStore.Images.Media.LATITUDE, currentLocation.getLatitude());
+                values.put(MediaStore.Images.Media.LONGITUDE, currentLocation.getLongitude());
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Images.Media.DISPLAY_NAME, displayName);
-                values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
                 values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES);
+                values.put(MediaStore.Images.Media.IS_PENDING, 1); // Marcar como pendiente
+            }
 
-                Uri uri = getContentResolver().insert(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            Uri collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            Uri itemUri = getContentResolver().insert(collection, values);
 
-                if (uri != null) {
-                    try (OutputStream out = getContentResolver().openOutputStream(uri);
-                         InputStream in = new FileInputStream(photoFile)) {
+            if (itemUri != null) {
+                try {
+                    // Copiar la imagen con sus metadatos EXIF
+                    try (android.os.ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(itemUri, "w", null);
+                         java.io.FileOutputStream fos = new java.io.FileOutputStream(pfd.getFileDescriptor());
+                         java.io.FileInputStream fis = new java.io.FileInputStream(photoFile)) {
 
                         byte[] buffer = new byte[8192];
                         int bytesRead;
-                        while ((bytesRead = in.read(buffer)) != -1) {
-                            out.write(buffer, 0, bytesRead);
+                        while ((bytesRead = fis.read(buffer)) != -1) {
+                            fos.write(buffer, 0, bytesRead);
                         }
-
-                        Toast.makeText(this, "Foto guardada en la galería", Toast.LENGTH_SHORT).show();
-
-                        // Notificar que la operación fue exitosa
-                        setResult(RESULT_OK);
-                        finish();
+                        fos.flush();
                     }
-                }
-            } else {
-                // Para versiones anteriores a Android 10
-                File picturesDir = Environment.getExternalStoragePublicDirectory(
-                        Environment.DIRECTORY_PICTURES);
-                File destFile = new File(picturesDir, displayName);
 
-                try (InputStream in = new FileInputStream(photoFile);
-                     OutputStream out = new FileOutputStream(destFile)) {
-
-                    byte[] buffer = new byte[8192];
-                    int bytesRead;
-                    while ((bytesRead = in.read(buffer)) != -1) {
-                        out.write(buffer, 0, bytesRead);
+                    // Actualizar los metadatos finales
+                    values.clear();
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0); // Ya no está pendiente
                     }
+
+                    // Re-agregar ubicación para asegurar que se guarde
+                    if (currentLocation != null) {
+                        values.put(MediaStore.Images.Media.LATITUDE, currentLocation.getLatitude());
+                        values.put(MediaStore.Images.Media.LONGITUDE, currentLocation.getLongitude());
+                    }
+
+                    getContentResolver().update(itemUri, values, null, null);
+
+                    // Notificar al sistema sobre el nuevo archivo
+                    Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+                    mediaScanIntent.setData(itemUri);
+                    sendBroadcast(mediaScanIntent);
+
+                    Toast.makeText(this, "Foto guardada con GPS en la galería", Toast.LENGTH_LONG).show();
+
+                    setResult(RESULT_OK);
+                    finish();
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    getContentResolver().delete(itemUri, null, null);
+                    Toast.makeText(this, "Error al guardar: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
-
-                // Notificar al MediaStore
-                Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-                mediaScanIntent.setData(Uri.fromFile(destFile));
-                sendBroadcast(mediaScanIntent);
-
-                Toast.makeText(this, "Foto guardada en la galería", Toast.LENGTH_SHORT).show();
-                setResult(RESULT_OK);
-                finish();
             }
 
-        } catch (IOException e) {
+        } catch (Exception e) {
             e.printStackTrace();
             tvStatus.setText("Error al guardar en galería: " + e.getMessage());
             Toast.makeText(this, "Error al guardar en galería", Toast.LENGTH_SHORT).show();
         }
     }
-
 
 }
